@@ -134,6 +134,30 @@ def _interactive_missing_args(parser: argparse.ArgumentParser, args: argparse.Na
             else:
                 parser.error("download requires --output")
 
+    if args.command == "set-tags":
+        if not args.project_uuid:
+            if is_tty:
+                args.project_uuid = _prompt_text("Dependency-Track project UUID")
+            else:
+                parser.error("set-tags requires --project-uuid")
+        if not args.project_tags:
+            if is_tty:
+                args.project_tags = _prompt_text("Comma-separated project tags")
+            else:
+                parser.error("set-tags requires --project-tags")
+
+
+def _parse_project_tags(raw_tags: str | None) -> list[str]:
+    if not raw_tags:
+        return []
+
+    tags = [tag.strip() for tag in raw_tags.split(",")]
+    return [tag for tag in tags if tag]
+
+
+def _tag_objects(tag_names: list[str]) -> list[dict[str, str]]:
+    return [{"name": tag_name} for tag_name in tag_names]
+
 
 def _request(
     *,
@@ -185,6 +209,9 @@ def upload_sbom(args: argparse.Namespace) -> int:
         payload["projectVersion"] = args.project_version
     if args.auto_create:
         payload["autoCreate"] = True
+    project_tags = _parse_project_tags(args.project_tags)
+    if project_tags:
+        payload["projectTags"] = project_tags
 
     body, _ = _request(
         base_url=args.base_url,
@@ -295,6 +322,59 @@ def list_projects(args: argparse.Namespace) -> int:
     return 0
 
 
+def set_project_tags(args: argparse.Namespace) -> int:
+    project_uuid = args.project_uuid
+    project_tags = _parse_project_tags(args.project_tags)
+    if not project_tags:
+        raise RuntimeError("No valid tags were provided")
+
+    body, _ = _request(
+        base_url=args.base_url,
+        api_key=args.api_key,
+        method="GET",
+        path=f"/api/v1/project/{project_uuid}",
+        timeout=args.timeout,
+    )
+
+    try:
+        project_payload = json.loads(body.decode("utf-8"))
+    except json.JSONDecodeError as error:
+        raise RuntimeError("Could not parse project response while setting tags") from error
+
+    if not isinstance(project_payload, dict):
+        raise RuntimeError("Unexpected project response format while setting tags")
+
+    update_payload: dict[str, Any] = {
+        "uuid": project_payload.get("uuid"),
+        "name": project_payload.get("name"),
+        "version": project_payload.get("version"),
+        "classifier": project_payload.get("classifier"),
+        "active": project_payload.get("active", True),
+        "tags": _tag_objects(project_tags),
+    }
+
+    if not update_payload["uuid"]:
+        raise RuntimeError("Project response did not include a uuid")
+    if not update_payload["name"]:
+        raise RuntimeError("Project response did not include a name")
+    if not update_payload["version"]:
+        raise RuntimeError("Project response did not include a version")
+    if not update_payload["classifier"]:
+        raise RuntimeError("Project response did not include a classifier")
+
+    _request(
+        base_url=args.base_url,
+        api_key=args.api_key,
+        method="POST",
+        path="/api/v1/project",
+        timeout=args.timeout,
+        payload=update_payload,
+    )
+
+    print(f"Updated project tags for {project_uuid}: {', '.join(project_tags)}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Upload and download SBOMs using the Dependency-Track API"
@@ -353,6 +433,10 @@ def build_parser() -> argparse.ArgumentParser:
     upload.add_argument("--project-name", help="Project name (used with --auto-create)")
     upload.add_argument("--project-version", help="Project version (used with --auto-create)")
     upload.add_argument(
+        "--project-tags",
+        help="Optional comma-separated tags to associate with the project",
+    )
+    upload.add_argument(
         "--auto-create",
         action="store_true",
         help="Auto-create project when used with --project-name and --project-version",
@@ -369,6 +453,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     download.add_argument("--output", help="Path to write the downloaded SBOM")
     download.set_defaults(func=download_sbom)
+
+    set_tags = subparsers.add_parser("set-tags", help="Set tags on an existing project")
+    set_tags.add_argument("--project-uuid", help="Dependency-Track project UUID")
+    set_tags.add_argument("--project-tags", help="Comma-separated project tags")
+    set_tags.set_defaults(func=set_project_tags)
 
     return parser
 
