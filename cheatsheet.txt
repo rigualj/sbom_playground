@@ -1,4 +1,5 @@
 277541b4-b4b3-4fb6-920f-1002112a4621
+277541b4-b4b3-4fb6-920f-1002112a4621
 
 ```bash
 python3 dependency_track_sbom_cli.py \
@@ -7,3 +8,16 @@ python3 dependency_track_sbom_cli.py \
   --format cyclonedx \
   --output "downloads/sbom.json"
 ```
+
+python3 dependency_track_sbom_cli.py \
+  upload \
+  --sbom "sbom_examples/proton-bridge/proton-bridge-v1.6.3.bom.json" \
+  --auto-create \
+  --project-name "proton-bridge" \
+  --project-version "1.6.3" \
+  --project-tags "app-4071,app_id:4071"
+
+python3 dependency_track_sbom_cli.py \
+  set-tags \
+  --project-uuid "277541b4-b4b3-4fb6-920f-1002112a4621" \
+  --project-tags "app-4071"

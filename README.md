@@ -79,6 +79,23 @@ python3 dependency_track_sbom_cli.py \
   --project-version "1.0.0"
 ```
 
+- Optional tags on upload (works with existing or auto-created projects):
+```bash
+python3 dependency_track_sbom_cli.py \
+  upload \
+  --sbom "/absolute/path/to/bom.json" \
+  --project-uuid "<project-uuid>" \
+  --project-tags "prod,customer-facing,critical"
+```
+
+Set tags on an existing project (standalone):
+```bash
+python3 dependency_track_sbom_cli.py \
+  set-tags \
+  --project-uuid "<project-uuid>" \
+  --project-tags "prod,customer-facing,critical"
+```
+
 If required arguments are not passed, the script prompts for them interactively (for example, project UUID, project name/version, or output path).
 
 ### Download an SBOM
