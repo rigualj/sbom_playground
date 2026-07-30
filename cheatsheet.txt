@@ -1,0 +1,9 @@
+277541b4-b4b3-4fb6-920f-1002112a4621
+
+```bash
+python3 dependency_track_sbom_cli.py \
+  download \
+  --project-uuid "277541b4-b4b3-4fb6-920f-1002112a4621" \
+  --format cyclonedx \
+  --output "downloads/sbom.json"
+```
