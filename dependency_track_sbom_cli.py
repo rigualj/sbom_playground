@@ -146,6 +146,13 @@ def _interactive_missing_args(parser: argparse.ArgumentParser, args: argparse.Na
             else:
                 parser.error("set-tags requires --project-tags")
 
+    if args.command == "list-sboms":
+        if not args.project_name:
+            if is_tty:
+                args.project_name = _prompt_text("Project name")
+            else:
+                parser.error("list-sboms requires --project-name")
+
 
 def _parse_project_tags(raw_tags: str | None) -> list[str]:
     if not raw_tags:
@@ -322,6 +329,88 @@ def list_projects(args: argparse.Namespace) -> int:
     return 0
 
 
+def list_sboms(args: argparse.Namespace) -> int:
+    target_name = args.project_name.strip().lower()
+    page_number = 1
+    page_size = 100
+    matches: list[dict[str, Any]] = []
+
+    while True:
+        query = urllib.parse.urlencode(
+            {
+                "pageNumber": str(page_number),
+                "pageSize": str(page_size),
+            }
+        )
+        path = f"/api/v1/project?{query}"
+
+        body, _ = _request(
+            base_url=args.base_url,
+            api_key=args.api_key,
+            method="GET",
+            path=path,
+            timeout=args.timeout,
+        )
+
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except json.JSONDecodeError as error:
+            raise RuntimeError("Could not parse project listing response") from error
+
+        if not isinstance(payload, list):
+            raise RuntimeError("Unexpected project listing format")
+        if not payload:
+            break
+
+        for project in payload:
+            if not isinstance(project, dict):
+                continue
+            name = str(project.get("name", "")).strip().lower()
+            if name == target_name:
+                matches.append(project)
+
+        if len(payload) < page_size:
+            break
+        page_number += 1
+
+    if not matches:
+        print(f"No project versions found for name: {args.project_name}")
+        return 0
+
+    print(f"Found {len(matches)} project version(s) for {args.project_name}:")
+    for project in matches:
+        project_uuid = project.get("uuid", "")
+        project_name = project.get("name", "")
+        project_version = project.get("version", "")
+        last_bom_import = project.get("lastBomImport")
+        last_bom_import_format = project.get("lastBomImportFormat")
+        has_bom = bool(last_bom_import)
+
+        print("-" * 80)
+        print(f"UUID: {project_uuid}")
+        print(f"Name: {project_name}")
+        print(f"Version: {project_version}")
+        print(f"Has BOM: {'yes' if has_bom else 'no'}")
+        print(f"Last BOM import: {last_bom_import or 'n/a'}")
+        print(f"Last BOM import format: {last_bom_import_format or 'n/a'}")
+        print("Download formats: cyclonedx, spdx")
+
+        if args.include_download_commands and project_uuid:
+            print("Download commands:")
+            print(
+                "  python3 dependency_track_sbom_cli.py download "
+                f"--project-uuid \"{project_uuid}\" --format cyclonedx "
+                f"--output \"downloads/{project_name}-{project_version}.cdx.json\""
+            )
+            print(
+                "  python3 dependency_track_sbom_cli.py download "
+                f"--project-uuid \"{project_uuid}\" --format spdx "
+                f"--output \"downloads/{project_name}-{project_version}.spdx\""
+            )
+
+    return 0
+
+
 def set_project_tags(args: argparse.Namespace) -> int:
     project_uuid = args.project_uuid
     project_tags = _parse_project_tags(args.project_tags)
@@ -458,6 +547,18 @@ def build_parser() -> argparse.ArgumentParser:
     set_tags.add_argument("--project-uuid", help="Dependency-Track project UUID")
     set_tags.add_argument("--project-tags", help="Comma-separated project tags")
     set_tags.set_defaults(func=set_project_tags)
+
+    list_sboms_cmd = subparsers.add_parser(
+        "list-sboms",
+        help="List available SBOMs for all versions of a project name",
+    )
+    list_sboms_cmd.add_argument("--project-name", help="Project name to search (exact match)")
+    list_sboms_cmd.add_argument(
+        "--include-download-commands",
+        action="store_true",
+        help="Print ready-to-run download commands for each matching project version",
+    )
+    list_sboms_cmd.set_defaults(func=list_sboms)
 
     return parser
 

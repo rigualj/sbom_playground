@@ -88,6 +88,17 @@ python3 dependency_track_sbom_cli.py \
   --project-tags "prod,customer-facing,critical"
 ```
 
+- Auto-create with tags in a single upload:
+```bash
+python3 dependency_track_sbom_cli.py \
+  upload \
+  --sbom "/absolute/path/to/bom.json" \
+  --auto-create \
+  --project-name "my-app" \
+  --project-version "1.0.0" \
+  --project-tags "prod,customer-facing,critical"
+```
+
 Set tags on an existing project (standalone):
 ```bash
 python3 dependency_track_sbom_cli.py \
@@ -97,6 +108,22 @@ python3 dependency_track_sbom_cli.py \
 ```
 
 If required arguments are not passed, the script prompts for them interactively (for example, project UUID, project name/version, or output path).
+
+### List Available SBOMs
+List project versions for an application name and show whether a BOM is available:
+```bash
+python3 dependency_track_sbom_cli.py \
+  list-sboms \
+  --project-name "proton-bridge"
+```
+
+Include ready-to-run download commands for each matching project version:
+```bash
+python3 dependency_track_sbom_cli.py \
+  list-sboms \
+  --project-name "proton-bridge" \
+  --include-download-commands
+```
 
 ### Download an SBOM
 CycloneDX output:
