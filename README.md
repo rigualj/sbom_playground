@@ -5,6 +5,25 @@ Play area for sbom testing and dependency track.
 
 This repo now includes a small MVP CLI: `dependency_track_sbom_cli.py`
 
+### MVP flow
+```mermaid
+flowchart TD
+    U[User] --> CLI[dependency_track_sbom_cli.py]
+    CLI --> ENV[(.env / shell env)]
+    CLI --> DT[Dependency-Track API]
+    CLI --> SBOM[SBOM file]
+
+    CLI -->|check_api| DT
+    CLI -->|list_projects| DT
+    CLI -->|upload| DT
+    CLI -->|list-sboms| DT
+    CLI -->|download| DT
+    CLI -->|set-tags| DT
+
+    DT -->|project metadata / BOM data| CLI
+    CLI -->|results / download commands| U
+```
+
 ### Prerequisites
 - Python 3.9+
 - A running Dependency-Track instance (for local testing on MacBook, commonly `http://localhost:8080`)
