@@ -17,6 +17,8 @@ flowchart TD
     CLI -->|list_projects| DT
     CLI -->|upload| DT
     CLI -->|list-sboms| DT
+    CLI -->|find-projects-by-cve| DT
+    CLI -->|find-projects-by-component| DT
     CLI -->|download| DT
     CLI -->|set-tags| DT
 
@@ -144,6 +146,57 @@ python3 dependency_track_sbom_cli.py \
   --include-download-commands
 ```
 
+### Find Projects by CVE
+List all projects affected by a CVE (default source is `NVD`):
+```bash
+python3 dependency_track_sbom_cli.py \
+  find-projects-by-cve \
+  --cve "CVE-2021-44228"
+```
+
+Exclude inactive projects and print ready-to-run SBOM download commands:
+```bash
+python3 dependency_track_sbom_cli.py \
+  find-projects-by-cve \
+  --cve "CVE-2021-44228" \
+  --exclude-inactive \
+  --include-download-commands
+```
+
+Optionally filter affected projects by name using substring match:
+```bash
+python3 dependency_track_sbom_cli.py \
+  find-projects-by-cve \
+  --cve "CVE-2021-44228" \
+  --search-text "proton"
+```
+
+### Find Projects by Component
+Find projects by component purl (recommended):
+```bash
+python3 dependency_track_sbom_cli.py \
+  find-projects-by-component \
+  --purl "pkg:npm/lodash@4.17.21"
+```
+
+Find projects by component name (optionally with group/version) and include download commands:
+```bash
+python3 dependency_track_sbom_cli.py \
+  find-projects-by-component \
+  --component-name "lodash" \
+  --component-version "4.17.21" \
+  --include-download-commands
+```
+
+Scope to active/latest projects only:
+```bash
+python3 dependency_track_sbom_cli.py \
+  find-projects-by-component \
+  --component-name "log4j-core" \
+  --exclude-inactive-projects \
+  --only-latest-project-versions
+```
+
 ### Download an SBOM
 CycloneDX output:
 ```bash
@@ -166,4 +219,6 @@ python3 dependency_track_sbom_cli.py \
 ### Notes
 - The script uses `PUT /api/v1/bom` for upload.
 - The script uses `GET /api/v1/bom/{format}/project/{project_uuid}?download=true` for download.
+- The script uses `GET /api/v1/vulnerability/source/{source}/vuln/{vuln}/projects` to find affected projects by CVE.
+- The script uses `GET /api/v1/component/identity` to find projects by component identity filters (purl/cpe/name/version).
 - If download returns JSON with a `bom` field, it is automatically base64-decoded before writing to disk.

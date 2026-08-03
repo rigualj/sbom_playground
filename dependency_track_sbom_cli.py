@@ -153,6 +153,24 @@ def _interactive_missing_args(parser: argparse.ArgumentParser, args: argparse.Na
             else:
                 parser.error("list-sboms requires --project-name")
 
+    if args.command == "find-projects-by-cve":
+        if not args.cve:
+            if is_tty:
+                args.cve = _prompt_text("CVE ID (for example: CVE-2021-44228)")
+            else:
+                parser.error("find-projects-by-cve requires --cve")
+
+    if args.command == "find-projects-by-component":
+        if not any([args.purl, args.cpe, args.swid_tag_id, args.component_name]):
+            if is_tty:
+                args.purl = _prompt_text(
+                    "Component selector (purl preferred; otherwise provide --component-name and optional group/version)"
+                )
+            else:
+                parser.error(
+                    "find-projects-by-component requires one of --purl, --cpe, --swid-tag-id, or --component-name"
+                )
+
 
 def _parse_project_tags(raw_tags: str | None) -> list[str]:
     if not raw_tags:
@@ -411,6 +429,209 @@ def list_sboms(args: argparse.Namespace) -> int:
     return 0
 
 
+def find_projects_by_cve(args: argparse.Namespace) -> int:
+    cve = args.cve.strip()
+    if not cve:
+        raise RuntimeError("--cve must not be empty")
+
+    source = args.source.strip().upper()
+    if not source:
+        raise RuntimeError("--source must not be empty")
+
+    page_size = args.page_size
+    if page_size < 1:
+        raise RuntimeError("--page-size must be >= 1")
+
+    page_number = 1
+    matches: list[dict[str, Any]] = []
+
+    while True:
+        query_params: dict[str, str] = {
+            "pageNumber": str(page_number),
+            "pageSize": str(page_size),
+            "excludeInactive": "true" if args.exclude_inactive else "false",
+        }
+        if args.search_text:
+            query_params["searchText"] = args.search_text
+
+        query = urllib.parse.urlencode(query_params)
+        path = f"/api/v1/vulnerability/source/{source}/vuln/{urllib.parse.quote(cve, safe='')}" f"/projects?{query}"
+
+        body, _ = _request(
+            base_url=args.base_url,
+            api_key=args.api_key,
+            method="GET",
+            path=path,
+            timeout=args.timeout,
+        )
+
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except json.JSONDecodeError as error:
+            raise RuntimeError("Could not parse affected projects response") from error
+
+        if not isinstance(payload, list):
+            raise RuntimeError("Unexpected affected projects response format")
+        if not payload:
+            break
+
+        for project in payload:
+            if isinstance(project, dict):
+                matches.append(project)
+
+        if len(payload) < page_size:
+            break
+        page_number += 1
+
+    if not matches:
+        print(f"No projects found for {source}:{cve}")
+        return 0
+
+    print(f"Found {len(matches)} affected project(s) for {source}:{cve}:")
+    for project in matches:
+        project_uuid = project.get("uuid", "")
+        project_name = project.get("name", "")
+        project_version = project.get("version", "")
+        project_active = project.get("active")
+        affected_component_uuids = project.get("affectedComponentUuids")
+        affected_count = len(affected_component_uuids) if isinstance(affected_component_uuids, list) else "n/a"
+
+        print("-" * 80)
+        print(f"UUID: {project_uuid}")
+        print(f"Name: {project_name}")
+        print(f"Version: {project_version}")
+        print(f"Active: {project_active}")
+        print(f"Affected components: {affected_count}")
+
+        if args.include_download_commands and project_uuid:
+            print("Download commands:")
+            print(
+                "  python3 dependency_track_sbom_cli.py download "
+                f"--project-uuid \"{project_uuid}\" --format cyclonedx "
+                f"--output \"downloads/{project_name}-{project_version}.cdx.json\""
+            )
+            print(
+                "  python3 dependency_track_sbom_cli.py download "
+                f"--project-uuid \"{project_uuid}\" --format spdx "
+                f"--output \"downloads/{project_name}-{project_version}.spdx\""
+            )
+
+    return 0
+
+
+def find_projects_by_component(args: argparse.Namespace) -> int:
+    selectors = {
+        "purl": args.purl,
+        "cpe": args.cpe,
+        "swidTagId": args.swid_tag_id,
+        "group": args.component_group,
+        "name": args.component_name,
+        "version": args.component_version,
+        "project": args.project_uuid,
+        "excludeInactiveProjects": "true" if args.exclude_inactive_projects else None,
+        "onlyLatestProjectVersions": "true" if args.only_latest_project_versions else None,
+    }
+
+    if not any([selectors["purl"], selectors["cpe"], selectors["swidTagId"], selectors["name"]]):
+        raise RuntimeError(
+            "Specify one of --purl, --cpe, --swid-tag-id, or --component-name to identify the component"
+        )
+
+    query_params = {k: str(v) for k, v in selectors.items() if v not in (None, "")}
+    query = urllib.parse.urlencode(query_params)
+    path = f"/api/v1/component/identity?{query}"
+
+    body, _ = _request(
+        base_url=args.base_url,
+        api_key=args.api_key,
+        method="GET",
+        path=path,
+        timeout=args.timeout,
+    )
+
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except json.JSONDecodeError as error:
+        raise RuntimeError("Could not parse component identity response") from error
+
+    if not isinstance(payload, list):
+        raise RuntimeError("Unexpected component identity response format")
+
+    if not payload:
+        print("No matching components/projects found.")
+        return 0
+
+    projects: dict[str, dict[str, Any]] = {}
+    for component in payload:
+        if not isinstance(component, dict):
+            continue
+
+        project = component.get("project")
+        if not isinstance(project, dict):
+            continue
+
+        project_uuid = str(project.get("uuid", "")).strip()
+        if not project_uuid:
+            continue
+
+        if project_uuid not in projects:
+            projects[project_uuid] = {
+                "uuid": project_uuid,
+                "name": project.get("name", ""),
+                "version": project.get("version", ""),
+                "active": project.get("active"),
+                "matches": [],
+            }
+
+        component_name = component.get("name", "")
+        component_version = component.get("version", "")
+        component_purl = component.get("purl", "")
+        projects[project_uuid]["matches"].append(
+            {
+                "name": component_name,
+                "version": component_version,
+                "purl": component_purl,
+            }
+        )
+
+    if not projects:
+        print("No projects found in component lookup response.")
+        return 0
+
+    print(f"Found {len(projects)} affected project(s) from component lookup:")
+    for project in projects.values():
+        print("-" * 80)
+        print(f"UUID: {project['uuid']}")
+        print(f"Name: {project['name']}")
+        print(f"Version: {project['version']}")
+        print(f"Active: {project['active']}")
+        print(f"Matched components: {len(project['matches'])}")
+
+        for match in project["matches"][:3]:
+            print(f"  - {match['name']}@{match['version']}")
+            if match["purl"]:
+                print(f"    purl: {match['purl']}")
+        if len(project["matches"]) > 3:
+            print(f"  ... and {len(project['matches']) - 3} more")
+
+        if args.include_download_commands and project["uuid"]:
+            safe_name = str(project["name"] or "project")
+            safe_version = str(project["version"] or "unknown")
+            print("Download commands:")
+            print(
+                "  python3 dependency_track_sbom_cli.py download "
+                f"--project-uuid \"{project['uuid']}\" --format cyclonedx "
+                f"--output \"downloads/{safe_name}-{safe_version}.cdx.json\""
+            )
+            print(
+                "  python3 dependency_track_sbom_cli.py download "
+                f"--project-uuid \"{project['uuid']}\" --format spdx "
+                f"--output \"downloads/{safe_name}-{safe_version}.spdx\""
+            )
+
+    return 0
+
+
 def set_project_tags(args: argparse.Namespace) -> int:
     project_uuid = args.project_uuid
     project_tags = _parse_project_tags(args.project_tags)
@@ -559,6 +780,90 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print ready-to-run download commands for each matching project version",
     )
     list_sboms_cmd.set_defaults(func=list_sboms)
+
+    find_projects_by_cve_cmd = subparsers.add_parser(
+        "find-projects-by-cve",
+        help="List projects affected by a vulnerability ID (for example: CVE)",
+    )
+    find_projects_by_cve_cmd.add_argument(
+        "--cve",
+        help="Vulnerability ID to query (for example: CVE-2021-44228)",
+    )
+    find_projects_by_cve_cmd.add_argument(
+        "--source",
+        default="NVD",
+        help="Vulnerability source (default: NVD)",
+    )
+    find_projects_by_cve_cmd.add_argument(
+        "--exclude-inactive",
+        action="store_true",
+        help="Exclude inactive projects from results",
+    )
+    find_projects_by_cve_cmd.add_argument(
+        "--search-text",
+        help="Optional case-insensitive substring match on project name",
+    )
+    find_projects_by_cve_cmd.add_argument(
+        "--page-size",
+        type=int,
+        default=100,
+        help="Page size for API requests (default: 100)",
+    )
+    find_projects_by_cve_cmd.add_argument(
+        "--include-download-commands",
+        action="store_true",
+        help="Print ready-to-run download commands for each affected project",
+    )
+    find_projects_by_cve_cmd.set_defaults(func=find_projects_by_cve)
+
+    find_projects_by_component_cmd = subparsers.add_parser(
+        "find-projects-by-component",
+        help="List projects that contain components matching identity filters",
+    )
+    find_projects_by_component_cmd.add_argument(
+        "--purl",
+        help="Package URL of the component (recommended selector)",
+    )
+    find_projects_by_component_cmd.add_argument(
+        "--cpe",
+        help="CPE of the component",
+    )
+    find_projects_by_component_cmd.add_argument(
+        "--swid-tag-id",
+        help="SWID tag ID of the component",
+    )
+    find_projects_by_component_cmd.add_argument(
+        "--component-group",
+        help="Component group/namespace selector",
+    )
+    find_projects_by_component_cmd.add_argument(
+        "--component-name",
+        help="Component name selector",
+    )
+    find_projects_by_component_cmd.add_argument(
+        "--component-version",
+        help="Component version selector",
+    )
+    find_projects_by_component_cmd.add_argument(
+        "--project-uuid",
+        help="Optional project UUID scope for component search",
+    )
+    find_projects_by_component_cmd.add_argument(
+        "--exclude-inactive-projects",
+        action="store_true",
+        help="Only return components from active projects",
+    )
+    find_projects_by_component_cmd.add_argument(
+        "--only-latest-project-versions",
+        action="store_true",
+        help="Only return components from projects marked as latest version",
+    )
+    find_projects_by_component_cmd.add_argument(
+        "--include-download-commands",
+        action="store_true",
+        help="Print ready-to-run download commands for each matching project",
+    )
+    find_projects_by_component_cmd.set_defaults(func=find_projects_by_component)
 
     return parser
 
